@@ -55,7 +55,7 @@ except ImportError:
 # Serial / capture config
 # ---------------------------------------------------------------------------
 
-SERIAL_PORT = "COM9"
+SERIAL_PORT = "COM4"
 SERIAL_BAUD = 115200
 
 # Must match UART `id=` (firmware anchors are 2..9).
@@ -84,7 +84,7 @@ SAMPLE_INTERVAL_S = 1e-6
 
 # Experiment geometry (meters). Used for naming / metadata / half-plane prior.
 REF_POSITION: Tuple[float, float] = (0.0, 0.0)
-TARGET_POSITION: Tuple[float, float] = (0.1, 0.1)
+TARGET_POSITION: Tuple[float, float] = (0.5, 0)
 
 # Select which layout is deployed (key of ANCHOR_STRUCTURES).
 ANCHOR_STRUCTURE_ID = 2
@@ -96,14 +96,14 @@ ANCHOR_STRUCTURES: Dict[int, Dict[str, Any]] = {
         "name": "CROSS_8_d25mm",
         "description": "X-ULA ids 2..5 along +x; Y-ULA ids 6..9 along +y; d=25 mm",
         "positions": {
-            2: (0.025, 0.00),
-            3: (0.05, 0.00),
-            4: (0.075, 0.00),
-            5: (0.1, 0.00),
-            6: (0.00, 0.025),
-            7: (0.00, 0.05),
-            8: (0.00, 0.075),
-            9: (0.00, 0.10),
+            2: (-0.0375, -1.00),
+            3: (-0.0125, -1.00),
+            4: (0.0125, -1.00),
+            5: (0.0375, -1.00),
+            6: (-1.00, -0.0375),
+            7: (-1.00, -0.0125),
+            8: (-1.00, 0.0125),
+            9: (-1.00, 0.0375),
         },
         "x_ids": [2, 3, 4, 5],
         "y_ids": [6, 7, 8, 9],
@@ -112,14 +112,14 @@ ANCHOR_STRUCTURES: Dict[int, Dict[str, Any]] = {
         "name": "CROSS_8_d50mm",
         "description": "X-ULA ids 2..5 along +x; Y-ULA ids 6..9 along +y; d=50 mm",
         "positions": {
-            2: (-0.0375, -0.1),
-            3: (-0.0125, -0.1),
-            4: (0.0125, -0.1),
-            5: (0.0375, -0.1),
-            6: (-0.1, -0.0375),
-            7: (-0.1, -0.0125),
-            8: (-0.1, 0.0125),
-            9: (-0.1, 0.0375),
+            2: (-0.1, -1),
+            3: (0.0, -1),
+            4: (0.15, -1),
+            5: (0.35, -1),
+            6: (-1, -0.15),
+            7: (-1, 0.0),
+            8: (-1, 0.1),
+            9: (-1, 0.25),
         },
         "x_ids": [2, 3, 4, 5],
         "y_ids": [6, 7, 8, 9],

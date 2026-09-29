@@ -1,0 +1,86 @@
+{
+  "ref_position": [
+    0.0,
+    0.0
+  ],
+  "target_position": [
+    0.5,
+    -0.5
+  ],
+  "anchor_structure_id": 1,
+  "anchor_structure": {
+    "name": "CROSS_8_d25mm",
+    "description": "X-ULA ids 2..5 along +x; Y-ULA ids 6..9 along +y; d=25 mm",
+    "positions": {
+      "2": [
+        -0.0375,
+        -1.0
+      ],
+      "3": [
+        -0.0125,
+        -1.0
+      ],
+      "4": [
+        0.0125,
+        -1.0
+      ],
+      "5": [
+        0.0375,
+        -1.0
+      ],
+      "6": [
+        -1.0,
+        -0.0375
+      ],
+      "7": [
+        -1.0,
+        -0.0125
+      ],
+      "8": [
+        -1.0,
+        0.0125
+      ],
+      "9": [
+        -1.0,
+        0.0375
+      ]
+    },
+    "x_ids": [
+      2,
+      3,
+      4,
+      5
+    ],
+    "y_ids": [
+      6,
+      7,
+      8,
+      9
+    ]
+  },
+  "anchor_list": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9
+  ],
+  "anchor_x_ids": [
+    2,
+    3,
+    4,
+    5
+  ],
+  "anchor_y_ids": [
+    6,
+    7,
+    8,
+    9
+  ],
+  "capture_rounds": 50,
+  "npz_path": "C:\\Users\\ZhuanZ\\Desktop\\CoRal simulation\\indoor_coral\\(0.00,0.00)_(0.50,-0.50)_1_reports.npz",
+  "created_at": "2026-09-29T16:37:13"
+}
