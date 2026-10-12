@@ -37,11 +37,11 @@ except ImportError:
 
 from CoRal_listener import compute_div_iq_and_ls
 
-INDOOR_CORAL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "indoor_coral")
+INDOOR_CORAL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "indoor_coral_2")
 
 DEFAULT_NPZ = os.path.join(
     INDOOR_CORAL_DIR,
-    "(0.00,0.00)_(0.50,0.00)_1_reports.npz",
+    "(0.00,0.00)_(1.00,1.00)_3_reports.npz",
 )
 
 # RF / timing (same as new_listener.py).

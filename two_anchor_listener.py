@@ -74,13 +74,13 @@ SAMPLE_INTERVAL_S = 1e-6
 
 # Experiment geometry in polar coords relative to the array midpoint.
 # Angle is CCW from +x (deg). Positions = (r cos θ, r sin θ).
-REF_DISTANCE_M = 0.50
-REF_ANGLE_DEG = 90.0
-TARGET_DISTANCE_M = 1.00
-TARGET_ANGLE_DEG = 60.0
+REF_DISTANCE_M = 0.30
+REF_ANGLE_DEG = 0.0
+TARGET_DISTANCE_M = 0.40
+TARGET_ANGLE_DEG = 0.0
 
 # Two-anchor baseline along +x, centered at origin (meters).
-BASELINE_M = 0.05
+BASELINE_M = 0.06
 ANCHOR_POSITIONS: Dict[int, Tuple[float, float]] = {
     2: (-0.5 * BASELINE_M, 0.0),
     3: (0.5 * BASELINE_M, 0.0),

@@ -84,26 +84,26 @@ SAMPLE_INTERVAL_S = 1e-6
 
 # Experiment geometry (meters). Used for naming / metadata / half-plane prior.
 REF_POSITION: Tuple[float, float] = (0.0, 0.0)
-TARGET_POSITION: Tuple[float, float] = (0.5, 0)
+TARGET_POSITION: Tuple[float, float] = (1, 1)
 
 # Select which layout is deployed (key of ANCHOR_STRUCTURES).
-ANCHOR_STRUCTURE_ID = 2
+ANCHOR_STRUCTURE_ID = 3
 
 # Structure id → concrete anchor placement (meters).
 # Default: 4 along +x, 4 along +y (L-shape, 25 mm spacing).
 ANCHOR_STRUCTURES: Dict[int, Dict[str, Any]] = {
-    1: {
+    3: {
         "name": "CROSS_8_d25mm",
-        "description": "X-ULA ids 2..5 along +x; Y-ULA ids 6..9 along +y; d=25 mm",
+        "description": "X-ULA ids 2..5 along +x; Y-ULA ids 6..9 along +y; d= 60mm",
         "positions": {
-            2: (-0.0375, -1.00),
-            3: (-0.0125, -1.00),
-            4: (0.0125, -1.00),
-            5: (0.0375, -1.00),
-            6: (-1.00, -0.0375),
-            7: (-1.00, -0.0125),
-            8: (-1.00, 0.0125),
-            9: (-1.00, 0.0375),
+            2: (-0.09, -1.00),
+            3: (-0.03, -1.00),
+            4: (0.03, -1.00),
+            5: (0.09, -1.00),
+            6: (-1.00, -0.09),
+            7: (-1.00, -0.03),
+            8: (-1.00, 0.03),
+            9: (-1.00, 0.09),
         },
         "x_ids": [2, 3, 4, 5],
         "y_ids": [6, 7, 8, 9],
@@ -163,7 +163,7 @@ def build_capture_npz_path() -> str:
     """
     CoRal-simulation/indoor_coral/{ref_position}_{target_position}_{structure}_reports.npz
     """
-    base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "indoor_coral")
+    base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "indoor_coral_2")
     os.makedirs(base, exist_ok=True)
     filename = (
         f"{_pos_token(REF_POSITION)}_"
