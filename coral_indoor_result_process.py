@@ -41,7 +41,7 @@ INDOOR_CORAL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ind
 
 DEFAULT_NPZ = os.path.join(
     INDOOR_CORAL_DIR,
-    "(0.00,0.00)_(1.00,1.00)_3_reports.npz",
+    "(0.00,0.00)_(0.50,0.50)_3_reports.npz",
 )
 
 # RF / timing (same as new_listener.py).
@@ -669,6 +669,7 @@ def estimate_pairs_in_group(
     group_name: str,
     prefer_positive: Optional[bool] = None,
     side_point: Optional[Tuple[float, float]] = None,
+    max_baseline_m: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     """
     Per-pair AoA for one ULA group.
@@ -677,7 +678,10 @@ def estimate_pairs_in_group(
     prefer_positive (left/right bit). If None, keep raw. target_pos is for
     evaluation fields only.
 
-    When any pair baseline exceeds λ/2, use multi-baseline overlap
+    max_baseline_m: if set, drop pairs longer than this (avoids overlap
+    consensus from aliased long baselines contaminating short pairs).
+
+    When any retained pair baseline exceeds λ/2, use multi-baseline overlap
     disambiguation (shared sinθ across pairs) instead of per-pair arcsin.
     """
     enable_half = prefer_positive is not None
@@ -697,6 +701,8 @@ def estimate_pairs_in_group(
         pos_b = node_pos[id_b]
         baseline = dist(pos_a, pos_b)
         if baseline < 1e-9:
+            continue
+        if max_baseline_m is not None and baseline > max_baseline_m + 1e-9:
             continue
         ratio = corrected_pair_ratio(reports, id_a, id_b, ref_pos, node_pos)
         if ratio is None:
@@ -807,6 +813,8 @@ def process_session_pairs(
     side_point_y: Optional[Tuple[float, float]] = None,
     infer_side: bool = True,
     half_plane_mode: str = "rssi_mock",
+    max_baseline_m: Optional[float] = None,
+    soft_true_half: bool = False,
 ) -> Tuple[List[List[Dict[str, Any]]], Dict[str, Any]]:
     """
     Two-pass pair AoA.
@@ -816,6 +824,10 @@ def process_session_pairs(
         may broadside-skip on non-aliased ULAs.
       - \"true_aoa\": offline GT prior — orient with TARGET, prefer=sign(trueULA),
         skip half-plane when |trueULA| < SIDE_CONFIDENCE_DEG. No RSSI path.
+
+    max_baseline_m: only form pairs with baseline ≤ this length.
+    soft_true_half: with true_aoa, still apply sign(true) near broadside
+    (sample deadzone still prevents noisy flips).
     """
     use_rssi_mock = half_plane_mode == "rssi_mock"
     use_true_aoa = half_plane_mode == "true_aoa"
@@ -840,6 +852,7 @@ def process_session_pairs(
                 "X",
                 prefer_positive=None,
                 side_point=side_point_x,
+                max_baseline_m=max_baseline_m,
             )
             + estimate_pairs_in_group(
                 reports,
@@ -850,6 +863,7 @@ def process_session_pairs(
                 "Y",
                 prefer_positive=None,
                 side_point=side_point_y,
+                max_baseline_m=max_baseline_m,
             )
         )
 
@@ -888,9 +902,10 @@ def process_session_pairs(
             session["node_pos"],
             side_point=side_point,
         )
-        if abs(th) < SIDE_CONFIDENCE_DEG:
+        if abs(th) < SIDE_CONFIDENCE_DEG and not soft_true_half:
             return None, uncertain_label
-        return bool(th > 0.0), sign_label
+        label = sign_label if abs(th) >= SIDE_CONFIDENCE_DEG else f"{sign_label}_soft"
+        return bool(th > 0.0), label
 
     if prefer_x is None:
         if use_true_aoa:
@@ -944,6 +959,9 @@ def process_session_pairs(
     side["prefer_x"] = prefer_x
     side["prefer_y"] = prefer_y
 
+    side["max_baseline_m"] = max_baseline_m
+    side["soft_true_half"] = soft_true_half
+
     per_round: List[List[Dict[str, Any]]] = []
     for r in range(session["n_rounds"]):
         reports = reports_for_round(session["data"], session["anchors"], r)
@@ -957,6 +975,7 @@ def process_session_pairs(
                 "X",
                 prefer_positive=prefer_x,
                 side_point=side_point_x,
+                max_baseline_m=max_baseline_m,
             )
             + estimate_pairs_in_group(
                 reports,
@@ -967,6 +986,7 @@ def process_session_pairs(
                 "Y",
                 prefer_positive=prefer_y,
                 side_point=side_point_y,
+                max_baseline_m=max_baseline_m,
             )
         )
     return per_round, side
@@ -993,13 +1013,41 @@ def _mean_std_nonsat(aoas: np.ndarray) -> Tuple[float, float, int]:
     return float(np.mean(valid)), float(np.std(valid)), int(valid.size)
 
 
+def _robust_center_std(
+    aoas: np.ndarray,
+    *,
+    mad_k: float = 3.0,
+) -> Tuple[float, float, int]:
+    """Median center after MAD outlier reject; std of kept samples."""
+    valid = _finite_nonsat_aoas(aoas)
+    if valid.size == 0:
+        return float("nan"), float("nan"), 0
+    med = float(np.median(valid))
+    mad = float(np.median(np.abs(valid - med)))
+    scale = 1.4826 * mad
+    if scale < 1e-9:
+        return med, float(np.std(valid)) if valid.size > 1 else 0.0, int(valid.size)
+    keep = valid[np.abs(valid - med) <= mad_k * scale]
+    if keep.size == 0:
+        keep = valid
+    center = float(np.median(keep))
+    std = float(np.std(keep)) if keep.size > 1 else scale
+    return center, std, int(keep.size)
+
+
 def collect_pair_series(
     per_round: List[List[Dict[str, Any]]],
+    *,
+    robust: bool = False,
+    inv_var_weight: bool = False,
+    mad_k: float = 3.0,
 ) -> List[Dict[str, Any]]:
     """
     Gather all per-round AoA samples for each (group, id_a, id_b).
 
     Mean/std exclude samples saturated at ±90 deg (arcsin clip).
+    robust: median + MAD trim instead of mean.
+    inv_var_weight: fusion_weight ∝ 1/(std^2+ε) instead of baseline^2*(1-sat)^2.
     """
     buckets: Dict[Tuple[str, int, int], List[Dict[str, Any]]] = {}
     for round_pairs in per_round:
@@ -1013,11 +1061,20 @@ def collect_pair_series(
         aoas_raw = np.asarray([s["aoa_raw_deg"] for s in samples], dtype=np.float64)
         pi_flags = np.asarray([s["pi_corrected"] for s in samples], dtype=bool)
         proto = samples[0]
-        mean_deg, std_deg, n_mean = _mean_std_nonsat(aoas)
+        if robust:
+            mean_deg, std_deg, n_mean = _robust_center_std(aoas, mad_k=mad_k)
+        else:
+            mean_deg, std_deg, n_mean = _mean_std_nonsat(aoas)
         n_sat = int(np.sum(np.isfinite(aoas) & (np.abs(np.abs(aoas) - 90.0) <= 1e-6)))
         n_rounds = int(aoas.size)
         sat_frac = float(n_sat) / float(max(n_rounds, 1))
-        reliability = (float(proto["baseline_m"]) ** 2) * ((1.0 - sat_frac) ** 2)
+        if inv_var_weight:
+            if math.isfinite(mean_deg) and math.isfinite(std_deg):
+                reliability = 1.0 / (float(std_deg) ** 2 + 4.0)  # ε≈(2deg)^2 floor
+            else:
+                reliability = 0.0
+        else:
+            reliability = (float(proto["baseline_m"]) ** 2) * ((1.0 - sat_frac) ** 2)
         if math.isfinite(mean_deg):
             bearing = bearing_from_aoa(
                 proto["pos_a"], proto["pos_b"], math.radians(mean_deg)
@@ -1067,14 +1124,83 @@ def _fuse_sin_weighted(aoas_deg: List[float], weights: List[float]) -> float:
     return float(np.degrees(np.arcsin(sin_fused)))
 
 
+def _unit_dir(dx: float, dy: float) -> Optional[Tuple[float, float]]:
+    n = math.hypot(dx, dy)
+    if n < 1e-15:
+        return None
+    return (dx / n, dy / n)
+
+
+def localize_from_pair_rays(
+    rays: List[Tuple[Tuple[float, float], Tuple[float, float], float]],
+) -> Optional[Tuple[float, float]]:
+    """
+    Weighted LS point minimizing sum of squared distances to pair rays.
+
+    Each ray is (origin, direction, weight). Origins are the individual pair
+    midpoints — do not assume a shared ULA midpoint when fusing.
+    """
+    rows: List[Tuple[float, float, float, float]] = []  # (a, b, c, w)
+    for origin, direction, weight in rays:
+        w = float(weight)
+        if w <= 0.0:
+            continue
+        ud = _unit_dir(float(direction[0]), float(direction[1]))
+        if ud is None:
+            continue
+        dx, dy = ud
+        ox, oy = float(origin[0]), float(origin[1])
+        # (p - o) x d = 0  →  dy px - dx py = ox dy - oy dx
+        a, b = dy, -dx
+        c = ox * dy - oy * dx
+        rows.append((a, b, c, w))
+    if len(rows) < 2:
+        return None
+
+    ata00 = ata01 = ata11 = 0.0
+    atb0 = atb1 = 0.0
+    for a, b, c, w in rows:
+        ata00 += w * a * a
+        ata01 += w * a * b
+        ata11 += w * b * b
+        atb0 += w * a * c
+        atb1 += w * b * c
+    det = ata00 * ata11 - ata01 * ata01
+    if abs(det) < 1e-18:
+        return None
+    px = (ata11 * atb0 - ata01 * atb1) / det
+    py = (ata00 * atb1 - ata01 * atb0) / det
+    if not (math.isfinite(px) and math.isfinite(py)):
+        return None
+    return (float(px), float(py))
+
+
+def _ray_from_pair_aoa(
+    pos_a: Tuple[float, float],
+    pos_b: Tuple[float, float],
+    mid: Tuple[float, float],
+    aoa_deg: float,
+    weight: float,
+) -> Optional[Tuple[Tuple[float, float], Tuple[float, float], float]]:
+    if not math.isfinite(aoa_deg) or weight <= 0.0:
+        return None
+    bearing = bearing_from_aoa(pos_a, pos_b, math.radians(aoa_deg))
+    direction = _unit_dir(math.cos(bearing), math.sin(bearing))
+    if direction is None:
+        return None
+    return (mid, direction, float(weight))
+
+
 def fuse_group_aoa_from_pairs(
     pair_series: List[Dict[str, Any]],
     group: str,
 ) -> Dict[str, Any]:
     """
-    Fuse pair means within one ULA group.
+    Diagnostic far-field sinθ fuse within one ULA group.
 
-    Weight = baseline^2 * (1 - sat_frac)^2; pairs with no valid mean get 0.
+    Pair midpoints generally differ; localization should use
+    ``localize_from_pair_rays`` instead of treating this fused AoA as if it
+    originated at the full-ULA midpoint.
     """
     aoas: List[float] = []
     weights: List[float] = []
@@ -1120,7 +1246,7 @@ def fuse_aoa_one_round(
     pair_weights: Dict[Tuple[str, int, int], float],
     group: str,
 ) -> float:
-    """Per-round group fusion; saturated samples get weight 0."""
+    """Per-round far-field sinθ fuse (diagnostic); saturated samples get weight 0."""
     aoas: List[float] = []
     weights: List[float] = []
     for p in round_pairs:
@@ -1134,6 +1260,42 @@ def fuse_aoa_one_round(
         aoas.append(th)
         weights.append(w)
     return _fuse_sin_weighted(aoas, weights)
+
+
+def rays_from_pair_series(
+    pair_series: List[Dict[str, Any]],
+) -> List[Tuple[Tuple[float, float], Tuple[float, float], float]]:
+    """Build localization rays from session pair means (each at its own mid)."""
+    rays: List[Tuple[Tuple[float, float], Tuple[float, float], float]] = []
+    for p in pair_series:
+        ray = _ray_from_pair_aoa(
+            p["pos_a"],
+            p["pos_b"],
+            p["mid"],
+            float(p["aoa_mean_deg"]),
+            float(p["fusion_weight"]),
+        )
+        if ray is not None:
+            rays.append(ray)
+    return rays
+
+
+def rays_from_round_pairs(
+    round_pairs: List[Dict[str, Any]],
+    pair_weights: Dict[Tuple[str, int, int], float],
+) -> List[Tuple[Tuple[float, float], Tuple[float, float], float]]:
+    """Build localization rays for one round (each pair at its own mid)."""
+    rays: List[Tuple[Tuple[float, float], Tuple[float, float], float]] = []
+    for p in round_pairs:
+        key = (p["group"], int(p["id_a"]), int(p["id_b"]))
+        w = float(pair_weights.get(key, 0.0))
+        th = float(p["aoa_deg"])
+        if _is_saturated(th):
+            continue
+        ray = _ray_from_pair_aoa(p["pos_a"], p["pos_b"], p["mid"], th, w)
+        if ray is not None:
+            rays.append(ray)
+    return rays
 
 
 def ray_from_ula(
@@ -1191,21 +1353,32 @@ def fuse_session_localization(
     pair_series: List[Dict[str, Any]],
     per_round: List[List[Dict[str, Any]]],
 ) -> Dict[str, Any]:
-    """Fuse X/Y group AoAs and localize; also per-round positions."""
+    """
+    Localize by fusing pair rays at their own midpoints (weighted LS), then
+    report equivalent ULA AoAs of the estimate for display.
+    """
     fuse_x = fuse_group_aoa_from_pairs(pair_series, "X")
     fuse_y = fuse_group_aoa_from_pairs(pair_series, "Y")
-    aoa_x = float(fuse_x["aoa_deg"])
-    aoa_y = float(fuse_y["aoa_deg"])
-    est_pos = position_from_two_aoas(
-        aoa_x,
-        aoa_y,
-        session["x_ids"],
-        session["y_ids"],
-        session["node_pos"],
-        session["target_pos"],
-    )
     true_pos = session["target_pos"]
+    node_pos = session["node_pos"]
+    x_ids = session["x_ids"]
+    y_ids = session["y_ids"]
+
+    est_pos = localize_from_pair_rays(rays_from_pair_series(pair_series))
+    if est_pos is not None:
+        aoa_x = true_aoa_deg_for_ula(est_pos, x_ids, node_pos, true_pos)
+        aoa_y = true_aoa_deg_for_ula(est_pos, y_ids, node_pos, true_pos)
+    else:
+        # Fallback: far-field sin fuse + full-ULA mid rays (legacy).
+        aoa_x = float(fuse_x["aoa_deg"])
+        aoa_y = float(fuse_y["aoa_deg"])
+        est_pos = position_from_two_aoas(
+            aoa_x, aoa_y, x_ids, y_ids, node_pos, true_pos
+        )
+
     err_m = dist(est_pos, true_pos) if est_pos is not None else float("nan")
+    true_aoa_x = true_aoa_deg_for_ula(true_pos, x_ids, node_pos, true_pos)
+    true_aoa_y = true_aoa_deg_for_ula(true_pos, y_ids, node_pos, true_pos)
 
     pair_weights = {
         (p["group"], int(p["id_a"]), int(p["id_b"])): float(p["fusion_weight"])
@@ -1215,28 +1388,33 @@ def fuse_session_localization(
     round_aoa_x: List[float] = []
     round_aoa_y: List[float] = []
     for round_pairs in per_round:
-        th_x = fuse_aoa_one_round(round_pairs, pair_weights, "X")
-        th_y = fuse_aoa_one_round(round_pairs, pair_weights, "Y")
-        round_aoa_x.append(th_x)
-        round_aoa_y.append(th_y)
-        round_pos.append(
-            position_from_two_aoas(
-                th_x,
-                th_y,
-                session["x_ids"],
-                session["y_ids"],
-                session["node_pos"],
-                session["target_pos"],
-            )
+        rpos = localize_from_pair_rays(
+            rays_from_round_pairs(round_pairs, pair_weights)
         )
+        if rpos is None:
+            th_x = fuse_aoa_one_round(round_pairs, pair_weights, "X")
+            th_y = fuse_aoa_one_round(round_pairs, pair_weights, "Y")
+            rpos = position_from_two_aoas(
+                th_x, th_y, x_ids, y_ids, node_pos, true_pos
+            )
+            round_aoa_x.append(th_x)
+            round_aoa_y.append(th_y)
+        else:
+            round_aoa_x.append(
+                true_aoa_deg_for_ula(rpos, x_ids, node_pos, true_pos)
+            )
+            round_aoa_y.append(
+                true_aoa_deg_for_ula(rpos, y_ids, node_pos, true_pos)
+            )
+        round_pos.append(rpos)
 
     return {
         "fuse_x": fuse_x,
         "fuse_y": fuse_y,
-        "aoa_x_deg": aoa_x,
-        "aoa_y_deg": aoa_y,
-        "true_aoa_x_deg": float(fuse_x["true_aoa_deg"]),
-        "true_aoa_y_deg": float(fuse_y["true_aoa_deg"]),
+        "aoa_x_deg": float(aoa_x),
+        "aoa_y_deg": float(aoa_y),
+        "true_aoa_x_deg": float(true_aoa_x),
+        "true_aoa_y_deg": float(true_aoa_y),
         "est_pos": est_pos,
         "true_pos": true_pos,
         "pos_err_m": err_m,
