@@ -84,10 +84,10 @@ SAMPLE_INTERVAL_S = 1e-6
 
 # Experiment geometry (meters). Used for naming / metadata / half-plane prior.
 REF_POSITION: Tuple[float, float] = (0.0, 0.0)
-TARGET_POSITION: Tuple[float, float] = (1, 1)
+TARGET_POSITION: Tuple[float, float] = (0.50, 0.00)
 
 # Select which layout is deployed (key of ANCHOR_STRUCTURES).
-ANCHOR_STRUCTURE_ID = 3
+ANCHOR_STRUCTURE_ID = 2
 
 # Structure id → concrete anchor placement (meters).
 # Default: 4 along +x, 4 along +y (L-shape, 25 mm spacing).
@@ -163,7 +163,7 @@ def build_capture_npz_path() -> str:
     """
     CoRal-simulation/indoor_coral/{ref_position}_{target_position}_{structure}_reports.npz
     """
-    base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "indoor_coral_2")
+    base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outdoor_coral")
     os.makedirs(base, exist_ok=True)
     filename = (
         f"{_pos_token(REF_POSITION)}_"
