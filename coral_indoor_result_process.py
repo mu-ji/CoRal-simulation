@@ -523,9 +523,123 @@ def ref_to_anchor_phase(
 
 
 def pair_slope_from_cte(rpt_a: Dict[str, Any], rpt_b: Dict[str, Any]) -> float:
+    """Legacy: LS slope of ∠(CTE_a/CTE_b) on REF and ECHO, then average."""
     _, _, slope_ref = compute_div_iq_and_ls(rpt_a.get("cte_ref", []), rpt_b.get("cte_ref", []))
     _, _, slope_echo = compute_div_iq_and_ls(rpt_a.get("cte_echo", []), rpt_b.get("cte_echo", []))
     return 0.5 * (float(slope_ref) + float(slope_echo))
+
+
+def _cte_to_complex(cte: List[Any]) -> np.ndarray:
+    if not cte:
+        return np.zeros(0, dtype=np.complex128)
+    arr = np.asarray(cte, dtype=np.float64)
+    if arr.ndim == 2 and arr.shape[1] >= 2:
+        return arr[:, 0] + 1j * arr[:, 1]
+    # list of (i,q)
+    out: List[complex] = []
+    for sample in cte:
+        if isinstance(sample, (tuple, list)) and len(sample) >= 2:
+            out.append(complex(float(sample[0]), float(sample[1])))
+    return np.asarray(out, dtype=np.complex128)
+
+
+def _unwrap_phase_series(z: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Return (sample_index, unwrapped phase) for non-zero IQ samples."""
+    xs: List[float] = []
+    phases: List[float] = []
+    prev = 0.0
+    n_valid = 0
+    for i in range(int(z.size)):
+        if abs(z[i]) == 0.0:
+            continue
+        phase = float(np.angle(z[i]))
+        if n_valid == 0:
+            prev = phase
+        else:
+            delta = phase - prev
+            while delta > math.pi:
+                delta -= 2.0 * math.pi
+            while delta < -math.pi:
+                delta += 2.0 * math.pi
+            prev = prev + delta
+        xs.append(float(i))
+        phases.append(prev)
+        n_valid += 1
+    return np.asarray(xs, dtype=np.float64), np.asarray(phases, dtype=np.float64)
+
+
+def _ls_slope(x: np.ndarray, y: np.ndarray) -> float:
+    n = int(x.size)
+    if n < 2:
+        return float("nan")
+    sum_x = float(np.sum(x))
+    sum_x2 = float(np.sum(x * x))
+    sum_y = float(np.sum(y))
+    sum_xy = float(np.sum(x * y))
+    denom = n * sum_x2 - sum_x * sum_x
+    if denom == 0.0:
+        return float("nan")
+    return float((n * sum_xy - sum_x * sum_y) / denom)
+
+
+def pair_slope_unwrap_diff(cte_a: List[Any], cte_b: List[Any]) -> float:
+    """
+    Slope of (unwrap∠CTE_a − unwrap∠CTE_b) vs sample index.
+
+    This is the cross-anchor differential frequency estimate for one packet
+    (REF or TARGET/ECHO), as opposed to LS on ∠(CTE_a/CTE_b).
+    """
+    za = _cte_to_complex(cte_a)
+    zb = _cte_to_complex(cte_b)
+    n = int(min(za.size, zb.size))
+    if n < 2:
+        return float("nan")
+    xa, pa = _unwrap_phase_series(za[:n])
+    xb, pb = _unwrap_phase_series(zb[:n])
+    # Align on common sample indices that survived both unwraps
+    if xa.size == 0 or xb.size == 0:
+        return float("nan")
+    # Prefer index-aligned subtraction when both kept the same samples
+    if xa.size == xb.size and np.allclose(xa, xb):
+        return _ls_slope(xa, pa - pb)
+    # Fallback: interpolate b onto a's indices
+    pb_i = np.interp(xa, xb, pb)
+    return _ls_slope(xa, pa - pb_i)
+
+
+def pair_slope_ref_packet(rpt_a: Dict[str, Any], rpt_b: Dict[str, Any]) -> float:
+    """REF-packet only: unwrap-diff slope between two anchors."""
+    return pair_slope_unwrap_diff(rpt_a.get("cte_ref", []), rpt_b.get("cte_ref", []))
+
+
+def pair_slope_ref_target_mean(rpt_a: Dict[str, Any], rpt_b: Dict[str, Any]) -> float:
+    """
+    Mean of REF-packet and TARGET/ECHO-packet unwrap-diff slopes.
+
+    REF packet  → slope_ref from cte_ref of the two anchors
+    TARGET packet → slope_tgt from cte_echo of the two anchors
+    """
+    s_ref = pair_slope_ref_packet(rpt_a, rpt_b)
+    s_tgt = pair_slope_unwrap_diff(rpt_a.get("cte_echo", []), rpt_b.get("cte_echo", []))
+    if math.isfinite(s_ref) and math.isfinite(s_tgt):
+        return 0.5 * (float(s_ref) + float(s_tgt))
+    if math.isfinite(s_ref):
+        return float(s_ref)
+    if math.isfinite(s_tgt):
+        return float(s_tgt)
+    return float("nan")
+
+
+# CFO slope source for pair_cfo_phase_rad:
+#   "ref_target_mean" — mean(unwrap-diff REF, unwrap-diff TARGET)  [preferred]
+#   "ref_only"        — unwrap-diff on REF packet only
+#   "node_diff"       — slope_a - slope_b (per-node REF/ECHO LS)
+#   "legacy_ratio"    — average LS of ∠(CTE_a/CTE_b) on REF & ECHO
+CFO_SLOPE_MODE = "ref_target_mean"
+
+# Additive offset on measured pair-averaged time_diff (16 MHz timer ticks).
+# 0 = use recorded Δt as-is. Read at call time in pair_cfo_phase_rad.
+TIME_DIFF_OFFSET_TICKS = 0.0
 
 
 def aoa_from_pair_phase(phase_rad: float, baseline_m: float) -> float:
@@ -584,6 +698,58 @@ def aoa_from_pair_phase_half(
     return {"aoa_raw_deg": th_raw, "aoa_deg": th_raw, "pi_corrected": False}
 
 
+def pair_cfo_slope(
+    rpt_a: Dict[str, Any],
+    rpt_b: Dict[str, Any],
+    *,
+    mode: Optional[str] = None,
+) -> float:
+    """Select CFO slope (rad/sample) according to CFO_SLOPE_MODE (read at call time)."""
+    if mode is None:
+        mode = CFO_SLOPE_MODE
+    if mode == "ref_only":
+        return pair_slope_ref_packet(rpt_a, rpt_b)
+    if mode == "ref_target_mean":
+        return pair_slope_ref_target_mean(rpt_a, rpt_b)
+    if mode == "legacy_ratio":
+        return float(pair_slope_from_cte(rpt_a, rpt_b))
+    # node_diff (default fallback)
+    sa = float(rpt_a.get("slope", float("nan")))
+    sb = float(rpt_b.get("slope", float("nan")))
+    if math.isfinite(sa) and math.isfinite(sb):
+        return sa - sb
+    return pair_slope_ref_target_mean(rpt_a, rpt_b)
+
+
+def pair_cfo_phase_rad(rpt_a: Dict[str, Any], rpt_b: Dict[str, Any]) -> float:
+    """
+    CFO phase for ∠Δy: -2π(f1-f2)Δt  (implemented as slope·Δt_samples).
+
+    Slope modes (see CFO_SLOPE_MODE):
+      ref_target_mean — mean of unwrap-diff slopes on REF and TARGET packets
+      ref_only        — unwrap-diff slope on REF packet only
+      node_diff       — per-node (REF/ECHO) slope_a − slope_b
+      legacy_ratio    — mean LS of ∠(CTE_a/CTE_b) on REF & ECHO
+
+    time_diff: average of the two anchors (typical mismatch is only ~2 ticks),
+    then plus TIME_DIFF_OFFSET_TICKS (read at call time).
+    """
+    tda = float(rpt_a.get("time_diff", 0.0) or 0.0)
+    tdb = float(rpt_b.get("time_diff", 0.0) or 0.0)
+    if not (math.isfinite(tda) and math.isfinite(tdb)):
+        return 0.0
+    td_ticks = 0.5 * (tda + tdb) + float(TIME_DIFF_OFFSET_TICKS)
+    td_s = td_ticks_to_seconds(td_ticks)
+    # Captures use ~0.7 ms; reject missing / absurd values.
+    if abs(td_s) < 1e-12 or abs(td_s) > 0.05:
+        return 0.0
+
+    slope = pair_cfo_slope(rpt_a, rpt_b)
+    if not math.isfinite(slope):
+        return 0.0
+    return float(slope) * (td_s / SAMPLE_INTERVAL_S)
+
+
 def corrected_pair_ratio(
     reports: Dict[int, Dict[str, Any]],
     id_a: int,
@@ -604,9 +770,7 @@ def corrected_pair_ratio(
     if not np.any(finite):
         return None
     ratio = np.where(finite, ratio, 0.0)
-    slope = pair_slope_from_cte(rpt_a, rpt_b)
-    td_ticks = 0.5 * (float(rpt_a["time_diff"]) + float(rpt_b["time_diff"]))
-    phi_cfo = slope * (td_ticks_to_seconds(td_ticks) / SAMPLE_INTERVAL_S)
+    phi_cfo = pair_cfo_phase_rad(rpt_a, rpt_b)
     phi_m = (
         ref_to_anchor_phase(ref_pos, node_pos, id_a)
         - ref_to_anchor_phase(ref_pos, node_pos, id_b)
