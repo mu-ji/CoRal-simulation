@@ -39,7 +39,7 @@ import coral_indoor_result_process as cip
 
 INDOOR_CORAL_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    "indoor_coral_2",
+    "indoor_coral_3",
 )
 STRUCTURE_ID = 3
 
@@ -59,7 +59,7 @@ def find_structure_sessions(
     data_dir: str,
     structure_id: int = STRUCTURE_ID,
 ) -> List[str]:
-    pattern = os.path.join(data_dir, "*_reports.npz")
+    pattern = os.path.join(data_dir, "*x_reports.npz")
     out: List[str] = []
     for npz_path in sorted(glob.glob(pattern)):
         try:

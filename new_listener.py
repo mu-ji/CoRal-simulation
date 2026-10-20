@@ -10,7 +10,9 @@ Firmware:
     idx=0 I=... Q=...
 
 One round = one slotframe (`sf`). Reports in a round must share the same sf.
-Missing anchors are marked lost (empty CTE / lost=1), not waited on.
+A round is kept only when every anchor in ANCHOR_LIST has reported.
+If the slotframe changes or an anchor repeats before that, the partial
+round is discarded and collection restarts on the next report.
 """
 
 from __future__ import annotations
@@ -32,8 +34,8 @@ import serial
 # Config
 # ---------------------------------------------------------------------------
 
-#SERIAL_PORT = "COM4"
-SERIAL_PORT = "COM9"
+SERIAL_PORT = "COM4"
+#SERIAL_PORT = "COM9"
 SERIAL_BAUD = 115200
 
 ANCHOR_LIST = [2, 3, 4, 5, 6, 7, 8, 9]
@@ -49,8 +51,8 @@ TIMER_HZ = 16e6
 SAMPLE_INTERVAL_S = 1e-6
 
 REF_POSITION: Tuple[float, float] = (0.0, 0.0)
-TARGET_POSITION: Tuple[float, float] = (0.50, 0.00)
-ANCHOR_STRUCTURE_ID = 2
+TARGET_POSITION: Tuple[float, float] = (0.25, 0.00)
+ANCHOR_STRUCTURE_ID = 3
 
 ANCHOR_STRUCTURES: Dict[int, Dict[str, Any]] = {
     3: {
@@ -104,7 +106,7 @@ def _pos_token(pos: Tuple[float, float]) -> str:
 
 
 def build_capture_npz_path() -> str:
-    base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "indoor_coral_4")
+    base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "indoor_coral_3")
     os.makedirs(base, exist_ok=True)
     name = (
         f"{_pos_token(REF_POSITION)}_"
@@ -685,16 +687,29 @@ def data_process(
     return result
 
 
+def discard_round(
+    sf: Optional[int],
+    reports: Dict[int, AnchorReport],
+) -> None:
+    """Drop a partial slotframe. It does not count toward CAPTURE_ROUNDS."""
+    if not reports:
+        return
+    missing = [aid for aid in ANCHOR_LIST if aid not in reports]
+    print(f"discard sf={sf}  got={sorted(reports)}  missing={missing}")
+    reports.clear()
+
+
 def finalize_round(
     sf: Optional[int],
     reports: Dict[int, AnchorReport],
     captured_rounds: List[Dict[int, AnchorReport]],
     lost_rounds: List[List[int]],
 ) -> bool:
-    """Close one slotframe. Missing anchors -> lost. Returns True if done."""
-    if not reports:
+    """Close one slotframe only if every anchor reported. Returns True if done."""
+    if set(reports) < set(ANCHOR_LIST):
+        discard_round(sf, reports)
         return False
-    lost = [aid for aid in ANCHOR_LIST if aid not in reports]
+    lost: List[int] = []
     snap = {aid: reports[aid] for aid in sorted(reports)}
     captured_rounds.append(snap)
     lost_rounds.append(lost)
@@ -722,7 +737,8 @@ def commit_report(
 ) -> bool:
     """
     Accumulate reports for the current slotframe (`sf`).
-    Finalize when sf changes, same anchor repeats, or all anchors arrived.
+    A round completes only when every anchor in ANCHOR_LIST has reported.
+    If sf changes or an anchor repeats before that, discard the partial round.
     """
     rpt.finalize()
     aid = rpt.anchor_id
@@ -741,10 +757,8 @@ def commit_report(
     if cur_sf is None:
         start(rpt.slotframe, rpt)
     elif rpt.slotframe != cur_sf or aid in bag:
-        done = finalize_round(cur_sf, bag, captured_rounds, lost_rounds)
+        discard_round(cur_sf, bag)
         state["sf"] = None
-        if done:
-            return True
         start(rpt.slotframe, rpt)
     else:
         bag[aid] = rpt

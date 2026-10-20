@@ -59,8 +59,8 @@ ANCHOR_STRUCTURES: Dict[int, Dict[str, Any]] = {
     },
 }
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outdoor_coral")
-DEFAULT_NPZ = os.path.join(DATA_DIR, "(0.00,0.00)_(0.50,0.00)_2_reports.npz")
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "indoor_coral_3")
+DEFAULT_NPZ = os.path.join(DATA_DIR, "(0.00,0.00)_(0.25,0.00)_3_towards_x_reports.npz")
 
 
 def _iq_rows_to_pairs(arr: np.ndarray) -> List[Tuple[float, float]]:
